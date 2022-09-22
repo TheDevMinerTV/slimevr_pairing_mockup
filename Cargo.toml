@@ -1,0 +1,11 @@
+[package]
+name = "testimpl"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+ansi_term = "0.12.1"
+dialoguer = "0.10.2"
+lazy_static = "1.4.0"
+solarxr_protocol = { git = "https://github.com/SlimeVR/SolarXR-Protocol", branch = "firmware-protocol-pairing" }
+tokio = { version = "1.21.1", features = ["full", "sync"] }
