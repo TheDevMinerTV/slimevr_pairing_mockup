@@ -6,7 +6,7 @@ use solarxr_protocol::device::{
     PairingResponseArgs, PoweredOnInfo, PoweredOnInfoArgs, ServerBoundMessage,
     ServerBoundMessageHeader, ServerBoundMessageHeaderArgs,
 };
-use solarxr_protocol::flatbuffers::{root, FlatBufferBuilder};
+use solarxr_protocol::flatbuffers::{root, FlatBufferBuilder, WIPOffset};
 use std::error::Error;
 use tokio::net::UdpSocket;
 
@@ -20,6 +20,23 @@ macro_rules! unwrap_or_continue {
             }
         }
     };
+}
+
+async fn send_fb_message<'f, 'd, T>(
+    socket: &UdpSocket,
+    addr: &str,
+    fbb: &'f mut FlatBufferBuilder<'d>,
+    msg: WIPOffset<T>,
+) -> Result<(), Box<dyn Error>> {
+    fbb.finish(msg, None);
+
+    let finished_data = fbb.finished_data().to_vec();
+
+    fbb.reset();
+
+    socket.send_to(&finished_data, addr).await?;
+
+    Ok(())
 }
 
 #[tokio::main]
@@ -110,10 +127,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                         },
                     );
 
-                    fbb.finish(hdr, None);
-                    let finished_data = fbb.finished_data().to_vec();
-                    fbb.reset();
-                    socket.send_to(&finished_data, addr).await?;
+                    send_fb_message(&socket, &addr.to_string(), &mut fbb, hdr).await?;
 
                     continue;
                 }
@@ -139,10 +153,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                             },
                         );
 
-                        fbb.finish(hdr, None);
-                        let finished_data = fbb.finished_data().to_vec();
-                        fbb.reset();
-                        socket.send_to(&finished_data, addr).await?;
+                        send_fb_message(&socket, &addr.to_string(), &mut fbb, hdr).await?;
                     }
 
                     {
@@ -162,12 +173,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                             },
                         );
 
-                        fbb.finish(hdr, None);
-                        let finished_data = fbb.finished_data().to_vec();
-                        fbb.reset();
-                        socket
-                            .send_to(&finished_data, "255.255.255.255:6969")
-                            .await?;
+                        send_fb_message(&socket, "255.255.255.255:6969", &mut fbb, hdr).await?;
                     }
                 }
             }
