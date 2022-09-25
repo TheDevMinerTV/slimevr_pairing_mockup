@@ -2,7 +2,6 @@ use ansi_term::Style;
 use dialoguer::theme::ColorfulTheme;
 use lazy_static::lazy_static;
 use mac_address::MacAddress;
-use solarxr_protocol::datatypes::hardware_info::McuType;
 use solarxr_protocol::device::{
     DeviceBoundMessage, DeviceBoundMessageHeader, DeviceBoundMessageHeaderArgs, PairingRequest,
     PairingRequestArgs, ServerBoundMessage, ServerBoundMessageHeader,
@@ -56,23 +55,16 @@ macro_rules! parse_mac_address {
 
 #[derive(Clone, Debug)]
 struct DeviceInfo {
-    display_name: String,
     ip: String,
     port: u16,
     mac: MacAddress,
-    mcu: McuType,
-    manufacturer: String,
-    model: String,
-    hardware_revision: String,
-    firmware_revision: String,
 }
 
 #[derive(Clone, Debug)]
 enum ListenerMessage {
-    Discovered(DeviceInfo),
+    PairInfo(MacAddress, DeviceInfo, bool),
     PairFailed(MacAddress, String),
     PairSucceeded(MacAddress),
-    PairInfo(MacAddress, bool),
 }
 
 #[derive(Clone, Debug)]
@@ -87,6 +79,7 @@ lazy_static! {
 enum Device {
     Available(DeviceInfo),
     Unavailable(DeviceInfo),
+    Pairing(DeviceInfo),
     Paired(DeviceInfo),
 }
 
@@ -111,25 +104,19 @@ async fn main() -> Result<(), Box<dyn Error>> {
             let hdr = unwrap_or_continue!(r:root::<ServerBoundMessageHeader>(&buf));
 
             match hdr.req_rep_type() {
-                ServerBoundMessage::PoweredOnInfo => {
-                    let info = unwrap_or_continue!(o:hdr.req_rep_as_powered_on_info());
+                ServerBoundMessage::PairingInfo => {
+                    let info = unwrap_or_continue!(o:hdr.req_rep_as_pairing_info());
 
-                    let hardware_info = info.hardware_info().unwrap();
+                    let mac = parse_mac_address!(info);
 
                     let device_info = DeviceInfo {
-                        display_name: hardware_info.display_name().unwrap().to_string(),
                         ip: addr.ip().to_string(),
                         port: addr.port(),
-                        mac: parse_mac_address!(hardware_info),
-                        mcu: hardware_info.mcu_id(),
-                        manufacturer: hardware_info.manufacturer().unwrap().to_string(),
-                        model: hardware_info.model().unwrap().to_string(),
-                        hardware_revision: hardware_info.hardware_revision().unwrap().to_string(),
-                        firmware_revision: hardware_info.firmware_version().unwrap().to_string(),
+                        mac,
                     };
 
                     listener_tx
-                        .send(ListenerMessage::Discovered(device_info))
+                        .send(ListenerMessage::PairInfo(mac, device_info, info.paired()))
                         .unwrap();
                 }
                 ServerBoundMessage::PairingResponse => {
@@ -149,15 +136,6 @@ async fn main() -> Result<(), Box<dyn Error>> {
                         }
                     }
                 }
-                ServerBoundMessage::PairingInfo => {
-                    let info = unwrap_or_continue!(o:hdr.req_rep_as_pairing_info());
-
-                    let mac = parse_mac_address!(info);
-
-                    listener_tx
-                        .send(ListenerMessage::PairInfo(mac, info.paired()))
-                        .unwrap();
-                }
                 m => {
                     println!("Unknown: {:?}", m);
                 }
@@ -170,47 +148,59 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
         while let Ok(m) = handler_rx.recv().await {
             match m {
-                ListenerMessage::Discovered(req) => {
-                    devices.insert(req.mac, Device::Available(req.clone()));
+                ListenerMessage::PairInfo(mac, info, paired) => match devices.get(&mac) {
+                    Some(Device::Available(info)) | Some(Device::Pairing(info)) if paired => {
+                        println!("{}:{} got paired with another device", info.ip, info.port);
 
-                    println!("{}", BOLD.paint("==== New tracker found ===="));
-                    println!("Display Name: {}", req.display_name);
-                    println!("IP: {}", &req.ip);
-                    println!("Port: {}", req.port);
-                    println!("MAC: {}", req.mac);
-                    println!("Manufacturer: {}", req.manufacturer);
-                    println!("Model: {}", req.model);
-                    println!("MCU: {}", req.mcu.variant_name().unwrap());
-                    println!("Hardware revision: {}", req.hardware_revision);
-                    println!("Firmware version: {}", req.firmware_revision);
-                    println!("{}", BOLD.paint("==========================="));
-
-                    println!("Do you want to pair with this device?");
-                    let selection = dialoguer::Select::with_theme(&ColorfulTheme::default())
-                        .items(&["Yes", "No"])
-                        .default(1)
-                        .interact()
-                        .unwrap();
-
-                    if selection == 1 {
-                        continue;
+                        devices.insert(mac, Device::Unavailable(info.clone()));
                     }
 
-                    println!("Pairing...");
+                    /*
+                       The match guard condition will apply to all the patterns.
+                       ref: https://doc.rust-lang.org/book/ch18-03-pattern-syntax.html#extra-conditionals-with-match-guards
+                    */
+                    None | Some(Device::Unavailable(_)) | Some(Device::Paired(_)) if !paired => {
+                        devices.insert(mac, Device::Available(info.clone()));
 
-                    handler_tx
-                        .send(HandlerMessage::Pair(req.ip.clone(), req.port))
-                        .unwrap();
-                }
+                        println!("{}", BOLD.paint("==== New tracker found ===="));
+                        println!("IP: {}", &info.ip);
+                        println!("Port: {}", info.port);
+                        println!("MAC: {}", info.mac);
+                        println!("{}", BOLD.paint("==========================="));
+
+                        // TODO: Find a way to cancel this prompt when
+                        //       the device was already paired, probably have
+                        //       to use another green thread for this though
+                        println!("Do you want to pair with this device?");
+                        let selection = dialoguer::Select::with_theme(&ColorfulTheme::default())
+                            .items(&["Yes", "No"])
+                            .default(1)
+                            .interact()
+                            .unwrap();
+
+                        if selection == 1 {
+                            continue;
+                        }
+
+                        println!("Pairing...");
+
+                        devices.insert(mac, Device::Pairing(info.clone()));
+
+                        handler_tx
+                            .send(HandlerMessage::Pair(info.ip.clone(), info.port))
+                            .unwrap();
+                    }
+                    _ => {}
+                },
                 ListenerMessage::PairFailed(mac, error) => {
                     let device = unwrap_or_continue!(o:devices.get(&mac));
 
                     match device {
-                        Device::Available(info) => {
+                        Device::Pairing(info) => {
                             println!("Pairing with {}:{} failed: {error}", info.ip, info.port);
                         }
                         _ => {
-                            unreachable!()
+                            unreachable!("device should be pairing when we receive this message");
                         }
                     }
                 }
@@ -218,40 +208,13 @@ async fn main() -> Result<(), Box<dyn Error>> {
                     let device = unwrap_or_continue!(o:devices.get(&mac));
 
                     match device {
-                        Device::Available(info) => {
+                        Device::Pairing(info) => {
                             println!("Pairing with {}:{} succeeded", info.ip, info.port);
 
                             devices.insert(mac, Device::Paired(info.clone()));
                         }
                         _ => {
-                            unreachable!()
-                        }
-                    }
-                }
-                ListenerMessage::PairInfo(mac, paired) => {
-                    let device = unwrap_or_continue!(o:devices.get(&mac));
-
-                    match device {
-                        Device::Available(info) => {
-                            if paired {
-                                println!("{}:{} got paired", info.ip, info.port);
-
-                                devices.insert(mac, Device::Unavailable(info.clone()));
-                            }
-                        }
-                        Device::Paired(info) => {
-                            if !paired {
-                                println!("{}:{} got unpaired", info.ip, info.port);
-
-                                devices.insert(mac, Device::Available(info.clone()));
-                            }
-                        }
-                        Device::Unavailable(info) => {
-                            if !paired {
-                                println!("{}:{} got unpaired", info.ip, info.port);
-
-                                devices.insert(mac, Device::Available(info.clone()));
-                            }
+                            unreachable!("device should be pairing when we receive this message");
                         }
                     }
                 }

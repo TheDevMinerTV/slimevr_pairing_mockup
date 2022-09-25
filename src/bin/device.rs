@@ -1,10 +1,8 @@
-use solarxr_protocol::datatypes::hardware_info::{
-    HardwareAddress, HardwareInfo, HardwareInfoArgs, McuType,
-};
+use solarxr_protocol::datatypes::hardware_info::HardwareAddress;
 use solarxr_protocol::device::{
     DeviceBoundMessage, DeviceBoundMessageHeader, PairingInfo, PairingInfoArgs, PairingResponse,
-    PairingResponseArgs, PoweredOnInfo, PoweredOnInfoArgs, ServerBoundMessage,
-    ServerBoundMessageHeader, ServerBoundMessageHeaderArgs,
+    PairingResponseArgs, ServerBoundMessage, ServerBoundMessageHeader,
+    ServerBoundMessageHeaderArgs,
 };
 use solarxr_protocol::flatbuffers::{root, FlatBufferBuilder, WIPOffset};
 use std::error::Error;
@@ -50,31 +48,12 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let mut fbb = FlatBufferBuilder::new();
 
     let hardware_address = HardwareAddress::new(0x0000010203040506);
-    let display_name = fbb.create_string("1st FSP201-Tracker");
-    let manufacturer = fbb.create_string("SlimeVR");
-    let model = fbb.create_string("SlimeVR-Tracker");
-    let hardware_revision = fbb.create_string("0.1.0");
-    let firmware_revision = fbb.create_string("0.1.0");
 
-    let hw_info = HardwareInfo::create(
+    let info = PairingInfo::create(
         &mut fbb,
-        &HardwareInfoArgs {
-            mcu_id: McuType::ESP8266,
+        &PairingInfoArgs {
             hardware_address: Some(&hardware_address),
-            display_name: Some(display_name),
-
-            manufacturer: Some(manufacturer),
-            model: Some(model),
-
-            hardware_revision: Some(hardware_revision),
-            firmware_version: Some(firmware_revision),
-        },
-    );
-
-    let info = PoweredOnInfo::create(
-        &mut fbb,
-        &PoweredOnInfoArgs {
-            hardware_info: Some(hw_info),
+            paired: false,
         },
     );
 
@@ -83,7 +62,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         &mut fbb,
         &ServerBoundMessageHeaderArgs {
             req_rep: Some(dev),
-            req_rep_type: ServerBoundMessage::PoweredOnInfo,
+            req_rep_type: ServerBoundMessage::PairingInfo,
         },
     );
 
