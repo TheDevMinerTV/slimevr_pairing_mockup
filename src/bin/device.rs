@@ -24,9 +24,13 @@ macro_rules! unwrap_or_continue {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
-    let mut fbb = FlatBufferBuilder::new();
+    let socket = UdpSocket::bind("0.0.0.0:0").await?;
+    socket.set_broadcast(true)?;
+    println!("Listening on {}", socket.local_addr()?);
 
     let mut paired_to: Option<String> = None;
+
+    let mut fbb = FlatBufferBuilder::new();
 
     let hardware_address = HardwareAddress::new(0x0000010203040506);
     let display_name = fbb.create_string("1st FSP201-Tracker");
@@ -66,12 +70,9 @@ async fn main() -> Result<(), Box<dyn Error>> {
         },
     );
 
-    let socket = UdpSocket::bind("0.0.0.0:0").await?;
-
-    socket.set_broadcast(true)?;
-
     fbb.finish(hdr, None);
     let finished_data = fbb.finished_data().to_vec();
+    fbb.reset();
     socket
         .send_to(&finished_data, "255.255.255.255:6969")
         .await?;
@@ -79,26 +80,55 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let mut buf = vec![0; 1024];
 
     loop {
-        fbb.reset();
-
         let (len, addr) = socket.recv_from(&mut buf).await?;
         let buf = buf[..len].to_vec();
 
         let hdr = unwrap_or_continue!(root::<DeviceBoundMessageHeader>(&buf));
 
-        match hdr.req_rep_type() {
-            DeviceBoundMessage::PairingRequest => {
-                println!("{} wants to pair", addr);
+        if hdr.req_rep_type() == DeviceBoundMessage::PairingRequest {
+            println!("{} wants to pair", addr);
 
-                match paired_to.as_ref() {
-                    Some(paired_to) => {
-                        println!("Already paired to {}", paired_to);
+            match paired_to.as_ref() {
+                Some(paired_to) => {
+                    println!("Already paired to {}", paired_to);
 
-                        let error = fbb.create_string("Already paired to another device");
+                    let error = fbb.create_string("Already paired to another device");
 
+                    let response = PairingResponse::create(
+                        &mut fbb,
+                        &PairingResponseArgs {
+                            error: Some(error),
+                            hardware_address: Some(&hardware_address),
+                        },
+                    );
+
+                    let hdr = ServerBoundMessageHeader::create(
+                        &mut fbb,
+                        &ServerBoundMessageHeaderArgs {
+                            req_rep: Some(response.as_union_value()),
+                            req_rep_type: ServerBoundMessage::PairingResponse,
+                        },
+                    );
+
+                    fbb.finish(hdr, None);
+                    let finished_data = fbb.finished_data().to_vec();
+                    fbb.reset();
+                    socket.send_to(&finished_data, addr).await?;
+
+                    continue;
+                }
+                None => {
+                    paired_to = Some(addr.to_string());
+
+                    println!("Paired to {}", paired_to.as_ref().unwrap());
+
+                    {
                         let response = PairingResponse::create(
                             &mut fbb,
-                            &PairingResponseArgs { error: Some(error) },
+                            &PairingResponseArgs {
+                                error: None,
+                                hardware_address: Some(&hardware_address),
+                            },
                         );
 
                         let hdr = ServerBoundMessageHeader::create(
@@ -111,58 +141,36 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
                         fbb.finish(hdr, None);
                         let finished_data = fbb.finished_data().to_vec();
+                        fbb.reset();
                         socket.send_to(&finished_data, addr).await?;
-
-                        continue;
                     }
-                    None => {
-                        paired_to = Some(addr.to_string());
 
-                        println!("Paired to {}", paired_to.as_ref().unwrap());
+                    {
+                        let info = PairingInfo::create(
+                            &mut fbb,
+                            &PairingInfoArgs {
+                                paired: true,
+                                hardware_address: Some(&hardware_address),
+                            },
+                        );
 
-                        {
-                            fbb.reset();
+                        let hdr = ServerBoundMessageHeader::create(
+                            &mut fbb,
+                            &ServerBoundMessageHeaderArgs {
+                                req_rep: Some(info.as_union_value()),
+                                req_rep_type: ServerBoundMessage::PairingInfo,
+                            },
+                        );
 
-                            let response = PairingResponse::create(
-                                &mut fbb,
-                                &PairingResponseArgs { error: None },
-                            );
-
-                            let hdr = ServerBoundMessageHeader::create(
-                                &mut fbb,
-                                &ServerBoundMessageHeaderArgs {
-                                    req_rep: Some(response.as_union_value()),
-                                    req_rep_type: ServerBoundMessage::PairingResponse,
-                                },
-                            );
-
-                            fbb.finish(hdr, None);
-                            let finished_data = fbb.finished_data().to_vec();
-                            socket.send_to(&finished_data, addr).await?;
-                        }
-
-                        {
-                            fbb.reset();
-
-                            let info =
-                                PairingInfo::create(&mut fbb, &PairingInfoArgs { paired: true });
-
-                            let hdr = ServerBoundMessageHeader::create(
-                                &mut fbb,
-                                &ServerBoundMessageHeaderArgs {
-                                    req_rep: Some(info.as_union_value()),
-                                    req_rep_type: ServerBoundMessage::PairingInfo,
-                                },
-                            );
-
-                            fbb.finish(hdr, None);
-                            let finished_data = fbb.finished_data().to_vec();
-                            socket.send_to(&finished_data, addr).await?;
-                        }
+                        fbb.finish(hdr, None);
+                        let finished_data = fbb.finished_data().to_vec();
+                        fbb.reset();
+                        socket
+                            .send_to(&finished_data, "255.255.255.255:6969")
+                            .await?;
                     }
                 }
             }
-            _ => {}
         }
     }
 }

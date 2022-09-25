@@ -7,5 +7,7 @@ edition = "2021"
 ansi_term = "0.12.1"
 dialoguer = "0.10.2"
 lazy_static = "1.4.0"
+mac_address = "1.1.4"
 solarxr_protocol = { git = "https://github.com/SlimeVR/SolarXR-Protocol", branch = "firmware-protocol-pairing" }
-tokio = { version = "1.21.1", features = ["full", "sync"] }
+#solarxr_protocol = { path= "../SlimeVR-Protocol/protocol/rust" }
+tokio = { version = "1.21.1", features = ["full"] }
