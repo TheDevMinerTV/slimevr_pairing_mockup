@@ -145,6 +145,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     spawn(async move {
         let mut devices: HashMap<MacAddress, Device> = HashMap::new();
+        let mut ignored_trackers: HashMap<MacAddress, ()> = HashMap::new();
 
         while let Ok(m) = handler_rx.recv().await {
             match m {
@@ -161,6 +162,10 @@ async fn main() -> Result<(), Box<dyn Error>> {
                     */
                     None | Some(Device::Unavailable(_)) | Some(Device::Paired(_)) if !paired => {
                         devices.insert(mac, Device::Available(info.clone()));
+
+                        if ignored_trackers.contains_key(&info.mac) {
+                            continue;
+                        }
 
                         println!("{}", BOLD.paint("==== New tracker found ===="));
                         println!("IP: {}", &info.ip);
@@ -179,6 +184,10 @@ async fn main() -> Result<(), Box<dyn Error>> {
                             .unwrap();
 
                         if selection == 1 {
+                            println!("Ignoring this device...");
+
+                            ignored_trackers.insert(info.mac, ());
+
                             continue;
                         }
 
